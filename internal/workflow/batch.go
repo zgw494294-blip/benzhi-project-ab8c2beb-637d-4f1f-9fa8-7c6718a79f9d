@@ -106,6 +106,9 @@ func (s *Service) UpsertSegments(id string, input SegmentBatchInput, actor strin
 		return prior, err
 	}
 	if value.Version != input.ExpectedVersion {
+		if ok, err := s.idempotentResult(id, input.ActionKey, &prior); err != nil || ok {
+			return prior, err
+		}
 		return prior, fmt.Errorf("%w: 预期 %d，当前 %d", archive.ErrVersionConflict, input.ExpectedVersion, value.Version)
 	}
 	items := make([]archive.TranscriptSegment, 0, len(input.Segments))
@@ -123,8 +126,19 @@ func (s *Service) UpsertSegments(id string, input SegmentBatchInput, actor strin
 	prior = SegmentBatchResult{ArchiveVersion: input.ExpectedVersion + 1, Results: results}
 	data, _ := json.Marshal(prior)
 	detail := fmt.Sprintf("批量段落：新增 %d、修订 %d、未变化 %d", counts["added"], counts["revised"], counts["unchanged"])
-	_, err = s.repository.Commit(store.CommitRequest{Archive: value, ExpectedVersion: input.ExpectedVersion, Actor: actor, Action: "segments.batch_upserted", Detail: detail, ActionKey: input.ActionKey, Result: data, At: s.now().UTC()})
-	return prior, err
+	event, commitErr := s.repository.Commit(store.CommitRequest{Archive: value, ExpectedVersion: input.ExpectedVersion, Actor: actor, Action: "segments.batch_upserted", Detail: detail, ActionKey: input.ActionKey, Result: data, At: s.now().UTC()})
+	if commitErr != nil {
+		if ok, err := s.idempotentResult(id, input.ActionKey, &prior); err != nil || ok {
+			return prior, err
+		}
+		return prior, commitErr
+	}
+	if event.ArchiveVersion != input.ExpectedVersion+1 {
+		if ok, err := s.idempotentResult(id, input.ActionKey, &prior); err != nil || ok {
+			return prior, err
+		}
+	}
+	return prior, nil
 }
 
 func (s *Service) PreflightMarks(id string, input MarkPreflightInput) (MarkPreflight, error) {
@@ -237,6 +251,9 @@ func (s *Service) CommitMarks(id string, input MarkBatchInput, actor string) (Ma
 	}
 	preflight, err := s.PreflightMarks(id, MarkPreflightInput{ExpectedVersion: input.ExpectedVersion, Marks: input.Marks})
 	if err != nil {
+		if ok, err := s.idempotentResult(id, input.ActionKey, &prior); err != nil || ok {
+			return prior, err
+		}
 		return prior, err
 	}
 	if len(preflight.Errors) > 0 {
@@ -258,8 +275,19 @@ func (s *Service) CommitMarks(id string, input MarkBatchInput, actor string) (Ma
 		prior.Marks[index].ReviewStatus = archive.ReviewPending
 	}
 	data, _ := json.Marshal(prior)
-	_, err = s.repository.Commit(store.CommitRequest{Archive: value, ExpectedVersion: input.ExpectedVersion, Actor: actor, Action: "marks.batch_added", Detail: fmt.Sprintf("批量提交 %d 项敏感标注", len(marks)), ActionKey: input.ActionKey, Result: data, At: s.now().UTC()})
-	return prior, err
+	event, commitErr := s.repository.Commit(store.CommitRequest{Archive: value, ExpectedVersion: input.ExpectedVersion, Actor: actor, Action: "marks.batch_added", Detail: fmt.Sprintf("批量提交 %d 项敏感标注", len(marks)), ActionKey: input.ActionKey, Result: data, At: s.now().UTC()})
+	if commitErr != nil {
+		if ok, err := s.idempotentResult(id, input.ActionKey, &prior); err != nil || ok {
+			return prior, err
+		}
+		return prior, commitErr
+	}
+	if event.ArchiveVersion != input.ExpectedVersion+1 {
+		if ok, err := s.idempotentResult(id, input.ActionKey, &prior); err != nil || ok {
+			return prior, err
+		}
+	}
+	return prior, nil
 }
 
 func (s *Service) ReviewBatch(id string, input ReviewBatchInput, actor string) (ReviewBatchResult, error) {
@@ -278,6 +306,9 @@ func (s *Service) ReviewBatch(id string, input ReviewBatchInput, actor string) (
 		return prior, err
 	}
 	if value.Version != input.ExpectedVersion {
+		if ok, err := s.idempotentResult(id, input.ActionKey, &prior); err != nil || ok {
+			return prior, err
+		}
 		return prior, fmt.Errorf("%w: 预期 %d，当前 %d", archive.ErrVersionConflict, input.ExpectedVersion, value.Version)
 	}
 	preview, err := s.redactor.Generate(value)
@@ -294,8 +325,19 @@ func (s *Service) ReviewBatch(id string, input ReviewBatchInput, actor string) (
 	prior = ReviewBatchResult{ArchiveVersion: input.ExpectedVersion + 1, ApprovedCount: approved, RejectedCount: rejected, AffectedSegments: affected}
 	data, _ := json.Marshal(prior)
 	detail := fmt.Sprintf("批量复核：确认 %d、退回 %d；受影响段落：%s", approved, rejected, strings.Join(affected, "、"))
-	_, err = s.repository.Commit(store.CommitRequest{Archive: value, ExpectedVersion: input.ExpectedVersion, Actor: actor, Action: "reviews.batch_decided", Detail: detail, ActionKey: input.ActionKey, Result: data, At: s.now().UTC()})
-	return prior, err
+	event, commitErr := s.repository.Commit(store.CommitRequest{Archive: value, ExpectedVersion: input.ExpectedVersion, Actor: actor, Action: "reviews.batch_decided", Detail: detail, ActionKey: input.ActionKey, Result: data, At: s.now().UTC()})
+	if commitErr != nil {
+		if ok, err := s.idempotentResult(id, input.ActionKey, &prior); err != nil || ok {
+			return prior, err
+		}
+		return prior, commitErr
+	}
+	if event.ArchiveVersion != input.ExpectedVersion+1 {
+		if ok, err := s.idempotentResult(id, input.ActionKey, &prior); err != nil || ok {
+			return prior, err
+		}
+	}
+	return prior, nil
 }
 
 func (s *Service) idempotentResult(id, actionKey string, target any) (bool, error) {

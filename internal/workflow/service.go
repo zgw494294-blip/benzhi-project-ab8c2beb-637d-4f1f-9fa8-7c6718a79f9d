@@ -131,8 +131,23 @@ func (s *Service) Create(input CreateArchiveInput, actor string) (*archive.Inter
 	if err := validateActor(actor); err != nil {
 		return nil, err
 	}
-	_, err = s.repository.Commit(store.CommitRequest{Archive: value, ExpectedVersion: 0, Actor: actor, Action: "archive.created", Detail: "建立访谈档案", ActionKey: input.ActionKey, At: now})
-	return value, err
+	event, commitErr := s.repository.Commit(store.CommitRequest{Archive: value, ExpectedVersion: 0, Actor: actor, Action: "archive.created", Detail: "建立访谈档案", ActionKey: input.ActionKey, At: now})
+	if commitErr != nil {
+		if prior, ok, err := s.idempotent(input.ID, input.ActionKey); err != nil {
+			return nil, err
+		} else if ok {
+			return prior, nil
+		}
+		return nil, commitErr
+	}
+	if event.ArchiveVersion != 1 {
+		if prior, ok, err := s.idempotent(input.ID, input.ActionKey); err != nil {
+			return nil, err
+		} else if ok {
+			return prior, nil
+		}
+	}
+	return value, nil
 }
 
 func (s *Service) List() ([]*archive.InterviewArchive, error) { return s.repository.List() }
@@ -185,6 +200,11 @@ func (s *Service) SetConsent(id string, input ConsentInput, actor string) (*arch
 		return nil, err
 	}
 	if value.Version != input.ExpectedVersion || value.ConsentRevision != input.ExpectedConsentRevision {
+		if prior, ok, err := s.idempotent(id, input.ActionKey); err != nil {
+			return nil, err
+		} else if ok {
+			return prior, nil
+		}
 		return nil, &archive.ConsentConflictError{CurrentRevision: value.ConsentRevision, ChangedFields: value.ConsentChangedFieldsSince(input.ExpectedConsentRevision)}
 	}
 	now := s.now().UTC()
@@ -203,8 +223,23 @@ func (s *Service) SetConsent(id string, input ConsentInput, actor string) (*arch
 		}
 	}
 	detail := fmt.Sprintf("保存授权修订 %d；变化字段：%s", value.ConsentRevision, strings.Join(changes, "、"))
-	_, err = s.repository.Commit(store.CommitRequest{Archive: value, ExpectedVersion: input.ExpectedVersion, Actor: actor, Action: "consent.revised", Detail: detail, ActionKey: input.ActionKey, At: now})
-	return value, err
+	event, commitErr := s.repository.Commit(store.CommitRequest{Archive: value, ExpectedVersion: input.ExpectedVersion, Actor: actor, Action: "consent.revised", Detail: detail, ActionKey: input.ActionKey, At: now})
+	if commitErr != nil {
+		if prior, ok, err := s.idempotent(id, input.ActionKey); err != nil {
+			return nil, err
+		} else if ok {
+			return prior, nil
+		}
+		return nil, commitErr
+	}
+	if event.ArchiveVersion != input.ExpectedVersion+1 {
+		if prior, ok, err := s.idempotent(id, input.ActionKey); err != nil {
+			return nil, err
+		} else if ok {
+			return prior, nil
+		}
+	}
+	return value, nil
 }
 
 func (s *Service) UpsertSegment(id string, input SegmentInput, actor string) (*archive.InterviewArchive, error) {
@@ -292,6 +327,11 @@ func (s *Service) Approve(id string, input ApprovalInput, actor string) (manifes
 		return manifest.ReleaseManifest{}, err
 	}
 	if value.Version != input.ExpectedVersion {
+		if prior, ok, err := s.idempotent(id, input.ActionKey); err != nil {
+			return manifest.ReleaseManifest{}, err
+		} else if ok && prior.ManifestID != "" {
+			return s.Manifest(id)
+		}
 		return manifest.ReleaseManifest{}, archive.ErrVersionConflict
 	}
 	if err := s.requireAuditIntegrity(id); err != nil {
@@ -305,9 +345,21 @@ func (s *Service) Approve(id string, input ApprovalInput, actor string) (manifes
 	result, _ := json.Marshal(struct {
 		ManifestID string `json:"manifestId"`
 	}{manifestID})
-	_, err = s.repository.Commit(store.CommitRequest{Archive: value, ExpectedVersion: input.ExpectedVersion, Actor: actor, Action: "release.approved", Detail: "批准发布并签发可验证清单", ActionKey: input.ActionKey, Result: result, At: now})
-	if err != nil {
-		return manifest.ReleaseManifest{}, err
+	commitEvent, commitErr := s.repository.Commit(store.CommitRequest{Archive: value, ExpectedVersion: input.ExpectedVersion, Actor: actor, Action: "release.approved", Detail: "批准发布并签发可验证清单", ActionKey: input.ActionKey, Result: result, At: now})
+	if commitErr != nil {
+		if prior, ok, err := s.idempotent(id, input.ActionKey); err != nil {
+			return manifest.ReleaseManifest{}, err
+		} else if ok && prior.ManifestID != "" {
+			return s.Manifest(id)
+		}
+		return manifest.ReleaseManifest{}, commitErr
+	}
+	if commitEvent.ArchiveVersion != input.ExpectedVersion+1 {
+		if prior, ok, err := s.idempotent(id, input.ActionKey); err != nil {
+			return manifest.ReleaseManifest{}, err
+		} else if ok && prior.ManifestID != "" {
+			return s.Manifest(id)
+		}
 	}
 	committed, err := s.repository.Load(id)
 	if err != nil {
@@ -371,6 +423,11 @@ func (s *Service) change(id string, expected int64, actionKey, actor, action, de
 		return nil, err
 	}
 	if value.Version != expected {
+		if prior, ok, err := s.idempotent(id, actionKey); err != nil {
+			return nil, err
+		} else if ok {
+			return prior, nil
+		}
 		return nil, fmt.Errorf("%w: 预期 %d，当前 %d", archive.ErrVersionConflict, expected, value.Version)
 	}
 	now := s.now().UTC()
@@ -378,8 +435,23 @@ func (s *Service) change(id string, expected int64, actionKey, actor, action, de
 		return nil, err
 	}
 	s.refreshConsentImpacts(value)
-	_, err = s.repository.Commit(store.CommitRequest{Archive: value, ExpectedVersion: expected, Actor: actor, Action: action, Detail: detail, ActionKey: actionKey, At: now})
-	return value, err
+	event, commitErr := s.repository.Commit(store.CommitRequest{Archive: value, ExpectedVersion: expected, Actor: actor, Action: action, Detail: detail, ActionKey: actionKey, At: now})
+	if commitErr != nil {
+		if prior, ok, err := s.idempotent(id, actionKey); err != nil {
+			return nil, err
+		} else if ok {
+			return prior, nil
+		}
+		return nil, commitErr
+	}
+	if event.ArchiveVersion != expected+1 {
+		if prior, ok, err := s.idempotent(id, actionKey); err != nil {
+			return nil, err
+		} else if ok {
+			return prior, nil
+		}
+	}
+	return value, nil
 }
 
 func (s *Service) refreshConsentImpacts(value *archive.InterviewArchive) {

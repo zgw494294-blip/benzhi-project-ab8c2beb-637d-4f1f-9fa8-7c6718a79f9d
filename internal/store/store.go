@@ -197,12 +197,6 @@ func (s *JSONStore) Commit(request CommitRequest) (archive.AuditEvent, error) {
 	} else if !errors.Is(err, archive.ErrNotFound) {
 		return archive.AuditEvent{}, err
 	}
-	if currentVersion != request.ExpectedVersion {
-		return archive.AuditEvent{}, fmt.Errorf("%w: 预期 %d，当前 %d", archive.ErrVersionConflict, request.ExpectedVersion, currentVersion)
-	}
-	if request.Archive.Version != request.ExpectedVersion {
-		return archive.AuditEvent{}, errors.New("提交对象的版本基线不正确")
-	}
 	events, err := s.readAudit(request.Archive.ID)
 	if err != nil {
 		return archive.AuditEvent{}, err
@@ -210,9 +204,16 @@ func (s *JSONStore) Commit(request CommitRequest) (archive.AuditEvent, error) {
 	if request.ActionKey != "" {
 		for _, existing := range events {
 			if existing.ActionKey == request.ActionKey {
+				request.Archive.Version = existing.ArchiveVersion
 				return existing, nil
 			}
 		}
+	}
+	if currentVersion != request.ExpectedVersion {
+		return archive.AuditEvent{}, fmt.Errorf("%w: 预期 %d，当前 %d", archive.ErrVersionConflict, request.ExpectedVersion, currentVersion)
+	}
+	if request.Archive.Version != request.ExpectedVersion {
+		return archive.AuditEvent{}, errors.New("提交对象的版本基线不正确")
 	}
 	committed := cloneArchive(request.Archive)
 	committed.Version = request.ExpectedVersion + 1
