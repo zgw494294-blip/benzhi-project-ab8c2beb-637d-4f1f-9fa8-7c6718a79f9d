@@ -234,10 +234,14 @@ func (s *JSONStore) Commit(request CommitRequest) (archive.AuditEvent, error) {
 		event.PreviousHash = events[len(events)-1].Hash
 	}
 	event.Hash = hashEvent(event)
-	if err := s.writeSnapshot(committed); err != nil {
+	auditBefore, err := s.appendAudit(event)
+	if err != nil {
 		return archive.AuditEvent{}, err
 	}
-	if err := s.appendAudit(event); err != nil {
+	if err := s.writeSnapshot(committed); err != nil {
+		if rollbackErr := s.rollbackAudit(event.ArchiveID, auditBefore); rollbackErr != nil {
+			return archive.AuditEvent{}, fmt.Errorf("写入档案快照: %w；回滚审计日志失败: %v", err, rollbackErr)
+		}
 		return archive.AuditEvent{}, err
 	}
 	request.Archive.Version = committed.Version
@@ -444,10 +448,15 @@ func (s *JSONStore) writeSnapshot(value *archive.InterviewArchive) error {
 	return nil
 }
 
-func (s *JSONStore) appendAudit(event archive.AuditEvent) error {
-	file, err := os.OpenFile(s.auditPath(event.ArchiveID), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
+func (s *JSONStore) appendAudit(event archive.AuditEvent) (int64, error) {
+	path := s.auditPath(event.ArchiveID)
+	before, err := auditFileSize(path)
 	if err != nil {
-		return fmt.Errorf("打开审计日志: %w", err)
+		return 0, fmt.Errorf("读取审计日志大小: %w", err)
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
+	if err != nil {
+		return before, fmt.Errorf("打开审计日志: %w", err)
 	}
 	data, err := json.Marshal(event)
 	if err == nil {
@@ -458,12 +467,52 @@ func (s *JSONStore) appendAudit(event archive.AuditEvent) error {
 	}
 	closeErr := file.Close()
 	if err != nil {
-		return fmt.Errorf("追加审计日志: %w", err)
+		return before, fmt.Errorf("追加审计日志: %w", err)
 	}
 	if closeErr != nil {
-		return fmt.Errorf("关闭审计日志: %w", closeErr)
+		return before, fmt.Errorf("关闭审计日志: %w", closeErr)
+	}
+	if err := syncDirectory(s.audits); err != nil {
+		return before, err
+	}
+	return before, nil
+}
+
+func (s *JSONStore) rollbackAudit(id string, size int64) error {
+	path := s.auditPath(id)
+	if size == 0 {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("删除审计日志: %w", err)
+		}
+		return syncDirectory(s.audits)
+	}
+	if err := os.Truncate(path, size); err != nil {
+		return fmt.Errorf("截断审计日志: %w", err)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY, 0o640)
+	if err != nil {
+		return fmt.Errorf("同步审计日志: %w", err)
+	}
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if syncErr != nil {
+		return syncErr
+	}
+	if closeErr != nil {
+		return closeErr
 	}
 	return syncDirectory(s.audits)
+}
+
+func auditFileSize(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
 }
 
 func hashEvent(event archive.AuditEvent) string {
