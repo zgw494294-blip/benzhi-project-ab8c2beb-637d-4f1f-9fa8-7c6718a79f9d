@@ -96,12 +96,8 @@ func Generate(id, approver string, at time.Time, a *archive.InterviewArchive, ev
 			return ReleaseManifest{}, errors.New("仍有复核项未通过")
 		}
 	}
-	content := ContentSummary{SubjectCode: a.SubjectCode, InterviewDate: a.InterviewDate, Purpose: a.Purpose, Segments: []FrozenSegment{}}
-	for _, s := range a.Segments {
-		content.Segments = append(content.Segments, FrozenSegment{SegmentID: s.SegmentID, Revision: s.Revision, SpeakerCode: s.SpeakerCode, SanitizedText: s.SanitizedText})
-	}
-	sort.Slice(content.Segments, func(i, j int) bool { return content.Segments[i].SegmentID < content.Segments[j].SegmentID })
-	consent := ConsentSummary{AllowedUses: sorted(a.Consent.AllowedUses), RestrictedTopics: sorted(a.Consent.RestrictedTopics), NameDisclosure: string(a.Consent.NameDisclosure), SealedUntil: a.Consent.SealedUntil}
+	content := contentSummaryFromArchive(a)
+	consent := consentSummaryFromArchive(a)
 	audit := summarizeAudit(events)
 	m := ReleaseManifest{FormatVersion: FormatVersion, ID: id, ArchiveID: a.ID, FrozenVersion: a.FrozenVersion, ApprovedBy: strings.TrimSpace(approver), ApprovedAt: at.UTC(), ContentSummary: content, ConsentSummary: consent, AuditSummary: audit}
 	m.ContentDigest = digest(content)
@@ -181,7 +177,28 @@ func VerifyAgainst(m ReleaseManifest, a *archive.InterviewArchive) error {
 	if a.Status != archive.StatusPublished || a.ManifestID != m.ID {
 		return errors.New("档案尚未以此清单发布")
 	}
+	if got := digest(contentSummaryFromArchive(a)); got != m.ContentDigest {
+		return errors.New("清单内容摘要与当前发布档案内容不一致")
+	}
+	if a.Consent != nil {
+		if got := digest(consentSummaryFromArchive(a)); got != m.ConsentDigest {
+			return errors.New("清单授权摘要与当前发布档案授权不一致")
+		}
+	}
 	return nil
+}
+
+func contentSummaryFromArchive(a *archive.InterviewArchive) ContentSummary {
+	content := ContentSummary{SubjectCode: a.SubjectCode, InterviewDate: a.InterviewDate, Purpose: a.Purpose, Segments: []FrozenSegment{}}
+	for _, s := range a.Segments {
+		content.Segments = append(content.Segments, FrozenSegment{SegmentID: s.SegmentID, Revision: s.Revision, SpeakerCode: s.SpeakerCode, SanitizedText: s.SanitizedText})
+	}
+	sort.Slice(content.Segments, func(i, j int) bool { return content.Segments[i].SegmentID < content.Segments[j].SegmentID })
+	return content
+}
+
+func consentSummaryFromArchive(a *archive.InterviewArchive) ConsentSummary {
+	return ConsentSummary{AllowedUses: sorted(a.Consent.AllowedUses), RestrictedTopics: sorted(a.Consent.RestrictedTopics), NameDisclosure: string(a.Consent.NameDisclosure), SealedUntil: a.Consent.SealedUntil}
 }
 
 func Marshal(m ReleaseManifest) ([]byte, error) {
