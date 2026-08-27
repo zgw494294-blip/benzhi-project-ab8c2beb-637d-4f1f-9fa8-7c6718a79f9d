@@ -50,19 +50,21 @@ type AuditIntegrity struct {
 }
 
 type JSONStore struct {
-	root      string
-	archives  string
-	audits    string
-	artifacts string
-	lockGuard sync.Mutex
-	locks     map[string]*sync.Mutex
+	root          string
+	archives      string
+	audits        string
+	artifacts     string
+	lockGuard     sync.Mutex
+	locks         map[string]*sync.Mutex
+	artifactMu    sync.RWMutex
+	artifactCache map[string][]byte
 }
 
 func Open(root string) (*JSONStore, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, errors.New("存储目录不能为空")
 	}
-	s := &JSONStore{root: root, archives: filepath.Join(root, "archives"), audits: filepath.Join(root, "audit"), artifacts: filepath.Join(root, "manifests"), locks: map[string]*sync.Mutex{}}
+	s := &JSONStore{root: root, archives: filepath.Join(root, "archives"), audits: filepath.Join(root, "audit"), artifacts: filepath.Join(root, "manifests"), locks: map[string]*sync.Mutex{}, artifactCache: map[string][]byte{}}
 	for _, dir := range []string{s.root, s.archives, s.audits, s.artifacts} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return nil, fmt.Errorf("创建存储目录 %s: %w", dir, err)
@@ -415,7 +417,14 @@ func (s *JSONStore) SaveArtifact(archiveID, name string, data []byte) error {
 	lock := s.archiveLock(archiveID)
 	lock.Lock()
 	defer lock.Unlock()
-	return atomicWrite(filepath.Join(s.artifacts, archiveID+"--"+name+".json"), data, 0o640)
+	if err := atomicWrite(filepath.Join(s.artifacts, archiveID+"--"+name+".json"), data, 0o640); err != nil {
+		return err
+	}
+	key := archiveID + "\x00" + name
+	s.artifactMu.Lock()
+	s.artifactCache[key] = data
+	s.artifactMu.Unlock()
+	return nil
 }
 
 func (s *JSONStore) LoadArtifact(archiveID, name string) ([]byte, error) {
@@ -425,9 +434,21 @@ func (s *JSONStore) LoadArtifact(archiveID, name string) ([]byte, error) {
 	if err := validateID(name); err != nil {
 		return nil, err
 	}
+	key := archiveID + "\x00" + name
+	s.artifactMu.RLock()
+	cached, ok := s.artifactCache[key]
+	s.artifactMu.RUnlock()
+	if ok {
+		return cached, nil
+	}
 	data, err := os.ReadFile(filepath.Join(s.artifacts, archiveID+"--"+name+".json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, archive.ErrNotFound
+	}
+	if err == nil {
+		s.artifactMu.Lock()
+		s.artifactCache[key] = data
+		s.artifactMu.Unlock()
 	}
 	return data, err
 }
