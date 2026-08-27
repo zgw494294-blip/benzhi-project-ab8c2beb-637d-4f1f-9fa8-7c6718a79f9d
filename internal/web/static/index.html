@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>口述史授权净化发布台</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <link rel="stylesheet" href="/assets/extended.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><p class="eyebrow">ORAL HISTORY RELEASE DESK</p><h1>口述史授权净化发布台</h1></div>
+    <label class="actor">当前操作人<input id="actor" value="整理员甲" autocomplete="name"></label>
+  </header>
+  <main>
+    <aside class="sidebar">
+      <div class="section-title"><h2>访谈档案</h2><button id="new-archive" class="quiet">＋ 新建</button></div>
+      <label class="actor"><input id="pending-only" type="checkbox"> 只看有待复核任务的档案</label>
+      <div id="archive-list" class="archive-list" aria-live="polite"></div>
+    </aside>
+    <section class="workspace">
+      <div id="notice" class="notice" hidden></div>
+      <section id="empty-state" class="empty-state">
+        <span class="seal">史</span><h2>从一份可复核的访谈档案开始</h2>
+        <p>系统仅管理转写文本、授权边界与处理证据，不保存音频本体。</p>
+        <button id="empty-create" class="primary">建立首份档案</button>
+      </section>
+      <div id="archive-workspace" hidden>
+        <section class="hero-card">
+          <div><p id="archive-id" class="mono"></p><h2 id="archive-title"></h2><p id="archive-purpose"></p></div>
+          <div class="status-panel"><span id="archive-status" class="status"></span><small id="archive-version"></small></div>
+        </section>
+        <nav class="tabs" aria-label="档案处理步骤">
+          <button data-tab="consent" class="active">1 授权边界</button><button data-tab="transcript">2 转写与标注</button><button data-tab="review">3 脱敏与复核</button><button data-tab="release">4 批准与清单</button><button data-tab="audit">审计时间线</button>
+        </nav>
+        <section id="tab-consent" class="tab-panel"></section>
+        <section id="tab-transcript" class="tab-panel" hidden></section>
+        <section id="tab-review" class="tab-panel" hidden></section>
+        <section id="tab-release" class="tab-panel" hidden></section>
+        <section id="tab-audit" class="tab-panel" hidden></section>
+      </div>
+    </section>
+  </main>
+  <dialog id="create-dialog">
+    <form id="create-form" method="dialog">
+      <div class="dialog-head"><div><p class="eyebrow">NEW ARCHIVE</p><h2>建立访谈档案</h2></div><button type="button" class="icon-button close-dialog" aria-label="关闭">×</button></div>
+      <div class="form-grid"><label>受访者代号<input name="subjectCode" required placeholder="如 OH-024"></label><label>采访日期<input name="interviewDate" type="date" required></label><label>整理员<input name="curator" required></label><label class="wide">用途说明<textarea name="purpose" required placeholder="说明研究、展陈或出版用途"></textarea></label></div>
+      <div class="dialog-actions"><button type="button" class="quiet close-dialog">取消</button><button class="primary" type="submit">建立档案</button></div>
+    </form>
+  </dialog>
+  <dialog id="mark-dialog">
+    <form id="mark-form" method="dialog">
+      <div class="dialog-head"><div><p class="eyebrow">SENSITIVITY MARK</p><h2>添加敏感标注</h2></div><button type="button" class="icon-button close-mark">×</button></div>
+      <input name="segmentId" type="hidden"><div class="form-grid"><label>起始字符位<input name="startOffset" type="number" min="0" required></label><label>结束字符位<input name="endOffset" type="number" min="1" required></label><label>敏感类别<select name="category"><option value="identity">人物身份</option><option value="precise_location">精确地点</option><option value="contact">联系方式</option><option value="restricted_topic">受限主题</option></select></label><label>处置方式<select name="strategy"><option value="replace">替换</option><option value="generalize">泛化</option><option value="delete">删除</option></select></label><label class="wide">处置文本<input name="replacement" placeholder="删除方式可留空"></label></div>
+      <div class="dialog-actions"><button type="button" class="quiet close-mark">取消</button><button class="primary" type="submit">保存标注</button></div>
+    </form>
+  </dialog>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>
